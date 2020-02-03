@@ -6,12 +6,15 @@ import math
 import pprint
 import time
 from threading import Lock
+from homeassistant.exceptions import PlatformNotReady
+from homeassistant.util import Throttle
 
 import requests
 from bs4 import BeautifulSoup
 
 GLOBAL_LOGIN_ATTEMPTS = 4
 GLOBAL_LOGIN_ATTEMPTS_LEFT = GLOBAL_LOGIN_ATTEMPTS
+    
 
 
 def is_number(string):
@@ -120,6 +123,7 @@ class NexiaThermostat:
         # Create a session
         self.session = requests.session()
         self.session.max_redirects = 3
+        self._available = True
 
         # Login if requested
         if auto_login:
@@ -255,17 +259,6 @@ class NexiaThermostat:
                 raise Exception(f"{error_text}\n{response}")
             raise Exception(f"No response from session. {error_text}")
 
-    def _needs_update(self):
-        """
-        Returns True if an update is needed
-        :return: bool
-        """
-        if self.update_rate == self.DISABLE_AUTO_UPDATE:
-            return False
-        if self.last_update is None:
-            return True
-        return datetime.datetime.now() - self.last_update > self.update_rate
-
     def _get_thermostat_json(self, thermostat_id=None, force_update=False):
         """
         Returns the thermostat's JSON data. It's either cached, or returned
@@ -273,9 +266,14 @@ class NexiaThermostat:
         :param force_update: bool - Forces an update
         :return: dict(thermostat_jason)
         """
+        # raise PlatformNotReady if we are trying to
+        # update in the I/O loop
+        if force_update is False:
+            if self.thermostat_json is None or self.update_rate == self.DISABLE_AUTO_UPDATE:
+              raise PlatformNotReady()
+
         with self.mutex:
-            if self.thermostat_json is None or self._needs_update() or \
-                    force_update is True:
+          if self.thermostat_json is None or force_update is True:
                 request = self._get_url(
                     "/houses/" + str(self.house_id) + "/xxl_thermostats")
                 if request and request.status_code == 200:
@@ -283,9 +281,12 @@ class NexiaThermostat:
                     if ts_json:
                         self.thermostat_json = ts_json
                         self.last_update = datetime.datetime.now()
+                        self._available = True
                     else:
+                        self._available = False
                         raise Exception("Nothing in the JSON")
                 else:
+                    self._available = False
                     self._check_response(
                         "Failed to get thermostat JSON, session probably timed"
                         " out", request)
@@ -440,6 +441,11 @@ class NexiaThermostat:
             return datetime.datetime.isoformat(datetime.datetime.min)
         return datetime.datetime.isoformat(self.last_update)
 
+    def available(self):
+        """Could the device be accessed during the last update call."""
+        return self._available
+
+    @Throttle(self.update_rate)
     def update(self):
         """
         Forces a status update
