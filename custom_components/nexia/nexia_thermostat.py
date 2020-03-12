@@ -1,7 +1,6 @@
 """ Nexia Climate Device Access """
 
 import datetime
-import json
 import logging
 import math
 import pprint
@@ -31,7 +30,17 @@ class NexiaThermostat:
 
     ROOT_URL = "https://www.mynexia.com"
     MOBILE_URL = f"{ROOT_URL}/mobile"
+
     AUTH_FAILED_STRING = "https://www.mynexia.com/login"
+
+    API_MOBILE_SESSION_URL = MOBILE_URL + "/session"
+    API_MOBILE_HOUSES_URL = MOBILE_URL + "/houses/{house_id}"
+    API_MOBILE_ACCOUNTS_SIGN_IN_URL = MOBILE_URL + "/accounts/sign_in"
+    API_MOBILE_ZONE_URL = MOBILE_URL + "/xxl_zones/{zone_id}/{end_point}"
+    API_MOBILE_THERMOSTAT_URL = (
+        MOBILE_URL + "/xxl_thermostats/{thermostat_id}/{end_point}"
+    )
+
     AUTH_FORGOTTEN_PASSWORD_STRING = (
         "https://www.mynexia.com/account/" "forgotten_credentials"
     )
@@ -154,7 +163,7 @@ class NexiaThermostat:
             print(f"PUT:\n" f"  URL: {url}\n" f"  Data: {pprint.pformat(payload)}")
             return None
 
-        request_url = f"{self.MOBILE_URL}{url}"
+        request_url = url
         _LOGGER.debug("POST: Calling url %s with payload: %s", request_url, payload)
 
         request = self.session.post(
@@ -178,7 +187,7 @@ class NexiaThermostat:
         :param url: str
         :return: response
         """
-        request_url = f"{self.MOBILE_URL}{url}"
+        request_url = url
 
         _LOGGER.debug("GET: Calling url %s", request_url)
         request = self.session.get(
@@ -260,7 +269,7 @@ class NexiaThermostat:
         """
         Finds the house id if none is provided
         """
-        request = self._post_url("/session", {})
+        request = self._post_url(self.API_MOBILE_SESSION_URL, {})
         if request and request.status_code == 200:
             ts_json = request.json()
             if ts_json:
@@ -279,6 +288,12 @@ class NexiaThermostat:
         :param force_update: bool - Forces an update
         :return: dict(thermostat_jason)
         """
+        if self.offline_json:
+            self.thermostat_json = self.offline_json["result"]["_links"]["child"][0][
+                "data"
+            ]["items"]
+            return self._get_thermostat_json_without_update(thermostat_id)
+
         if not self.mobile_id:
             # not yet authenticated
             return None
@@ -292,7 +307,9 @@ class NexiaThermostat:
                     or self._needs_update()
                     or force_update is True
                 ):
-                    request = self._get_url("/houses/" + str(self.house_id))
+                    request = self._get_url(
+                        self.API_MOBILE_HOUSES_URL.format(house_id=self.house_id)
+                    )
                     if request and request.status_code == 200:
                         ts_json = request.json()
                         if ts_json:
@@ -309,6 +326,9 @@ class NexiaThermostat:
                             request,
                         )
 
+        return self._get_thermostat_json_without_update(thermostat_id)
+
+    def _get_thermostat_json_without_update(self, thermostat_id=None):
         # _LOGGER.debug(f"self.thermostat_json: {self.thermostat_json}")
         if thermostat_id == self.ALL_IDS:
             return self.thermostat_json
@@ -499,7 +519,7 @@ class NexiaThermostat:
                 "login": self.username,
                 "password": self.password,
             }
-            request = self._post_url("/accounts/sign_in", payload)
+            request = self._post_url(self.API_MOBILE_ACCOUNTS_SIGN_IN_URL, payload)
 
             if (
                 request is None
@@ -816,7 +836,7 @@ class NexiaThermostat:
         :return: bool
         """
         system_status = self._get_thermostat_key("system_status", thermostat_id)
-        return not system_status in (self.SYSTEM_STATUS_WAIT, self.SYSTEM_STATUS_IDLE)
+        return system_status not in (self.SYSTEM_STATUS_WAIT, self.SYSTEM_STATUS_IDLE)
 
     def is_emergency_heat_active(self, thermostat_id=None):
         """
@@ -900,7 +920,9 @@ class NexiaThermostat:
         :return: float
         """
         if self.has_variable_fan_speed(thermostat_id):
-            return self._get_thermostat_settings_key("fan_speed", thermostat_id)
+            return self._get_thermostat_settings_key("fan_speed", thermostat_id)[
+                "current_value"
+            ]
         raise AttributeError("This system does not have variable fan speed.")
 
     def get_dehumidify_setpoint(self, thermostat_id=None):
@@ -959,7 +981,9 @@ class NexiaThermostat:
         """
         fan_mode = fan_mode.lower()
         if fan_mode in self.FAN_MODES:
-            url = _get_thermostat_post_url("fan_mode", thermostat_id)
+            url = self.API_MOBILE_THERMOSTAT_URL.format(
+                end_point="fan_mode", thermostat_id=thermostat_id
+            )
             data = {"value": fan_mode}
             self._post_and_update_thermostat_json(thermostat_id, url, data)
 
@@ -979,7 +1003,9 @@ class NexiaThermostat:
         min_speed, max_speed = self.get_variable_fan_speed_limits()
 
         if min_speed <= fan_setpoint <= max_speed:
-            url = _get_thermostat_post_url("fan_speed", thermostat_id)
+            url = self.API_MOBILE_THERMOSTAT_URL.format(
+                end_point="fan_speed", thermostat_id=thermostat_id
+            )
             data = {"value": fan_setpoint}
             self._post_and_update_thermostat_json(thermostat_id, url, data)
         else:
@@ -999,7 +1025,9 @@ class NexiaThermostat:
         air_cleaner_mode = air_cleaner_mode.lower()
         if air_cleaner_mode in self.AIR_CLEANER_MODES:
             if air_cleaner_mode != self.get_air_cleaner_mode(thermostat_id):
-                url = _get_thermostat_post_url("air_cleaner_mode", thermostat_id)
+                url = self.API_MOBILE_THERMOSTAT_URL.format(
+                    end_point="air_cleaner_mode", thermostat_id=thermostat_id
+                )
                 data = {"value": air_cleaner_mode}
                 self._post_and_update_thermostat_json(thermostat_id, url, data)
         else:
@@ -1013,7 +1041,9 @@ class NexiaThermostat:
         :param thermostat_id: int - the ID of the thermostat to use
         :return: None
         """
-        url = _get_thermostat_post_url("scheduling_enabled", thermostat_id)
+        url = self.API_MOBILE_THERMOSTAT_URL.format(
+            end_point="scheduling_enabled", thermostat_id=thermostat_id
+        )
         data = {"value": "true" if follow_schedule else "false"}
         self._post_and_update_thermostat_json(thermostat_id, url, data)
 
@@ -1025,7 +1055,9 @@ class NexiaThermostat:
         :return: None
         """
         if self.has_emergency_heat(thermostat_id):
-            url = _get_thermostat_post_url("emergency_heat", thermostat_id)
+            url = self.API_MOBILE_THERMOSTAT_URL.format(
+                end_point="emergency_heat", thermostat_id=thermostat_id
+            )
             data = {"value": bool(emergency_heat_on)}
             self._post_and_update_thermostat_json(thermostat_id, url, data)
         else:
@@ -1103,7 +1135,9 @@ class NexiaThermostat:
                     f"({min_humidity} - {max_humidity})"
                 )
 
-            url = _get_thermostat_post_url("dehumidify", thermostat_id)
+            url = self.API_MOBILE_THERMOSTAT_URL.format(
+                end_point="dehumidify", thermostat_id=thermostat_id
+            )
             data = {"value": dehumidify_setpoint}
             self._post_and_update_thermostat_json(thermostat_id, url, data)
         else:
@@ -1272,7 +1306,7 @@ class NexiaThermostat:
             "zone_status", thermostat_id=thermostat_id, zone_id=zone_id
         )
 
-    def get_run_mode(self, thermostat_id=None, zone_id=0):
+    def _get_zone_run_mode(self, thermostat_id=None, zone_id=0):
         """
         Returns the run mode ("permanent_hold", "run_schedule")
         :param thermostat_id: int - the ID of the thermostat to use
@@ -1291,7 +1325,7 @@ class NexiaThermostat:
         :param zone_id: The index of the zone, defaults to 0.
         :return: str
         """
-        run_mode = self.get_run_mode(thermostat_id, zone_id)
+        run_mode = self._get_zone_run_mode(thermostat_id, zone_id)
         run_mode_current_value = run_mode["current_value"]
         run_mode_label = find_dict_with_keyvalue_in_json(
             run_mode["options"], "value", run_mode_current_value
@@ -1396,7 +1430,9 @@ class NexiaThermostat:
         """
 
         # Set the thermostat
-        url = _get_zone_post_url("return_to_schedule", zone_id=zone_id)
+        url = self.API_MOBILE_ZONE_URL.format(
+            end_point="return_to_schedule", zone_id=zone_id
+        )
         data = {}
         self._post_and_update_zone_json(thermostat_id, zone_id, url, data)
 
@@ -1525,10 +1561,10 @@ class NexiaThermostat:
     ):
         # Set the thermostat
         if (
-            self.get_run_mode(thermostat_id, zone_id)["current_value"]
+            self._get_zone_run_mode(thermostat_id, zone_id)["current_value"]
             != self.HOLD_PERMANENT
         ):
-            url = _get_zone_post_url("run_mode", zone_id=zone_id)
+            url = self.API_MOBILE_ZONE_URL.format(end_point="run_mode", zone_id=zone_id)
             data = {"value": self.HOLD_PERMANENT}
             self._post_and_update_zone_json(thermostat_id, zone_id, url, data)
 
@@ -1551,7 +1587,9 @@ class NexiaThermostat:
             zone_cooling_setpoint != cool_temperature
             or heat_temperature != zone_heating_setpoint
         ):
-            url = _get_zone_post_url("setpoints", zone_id=zone_id)
+            url = self.API_MOBILE_ZONE_URL.format(
+                end_point="setpoints", zone_id=zone_id
+            )
             data = {"heat": heat_temperature, "cool": cool_temperature}
             self._post_and_update_zone_json(thermostat_id, zone_id, url, data)
 
@@ -1565,7 +1603,9 @@ class NexiaThermostat:
         :return: None
         """
         if self.get_zone_preset(thermostat_id=thermostat_id, zone_id=zone_id) != preset:
-            url = _get_zone_post_url("preset_selected", zone_id=zone_id)
+            url = self.API_MOBILE_ZONE_URL.format(
+                end_point="preset_selected", zone_id=zone_id
+            )
 
             preset_selected = self._get_zone_setting(
                 "preset_selected", thermostat_id=thermostat_id, zone_id=zone_id
@@ -1588,7 +1628,9 @@ class NexiaThermostat:
         """
         # Validate the data
         if mode in self.OPERATION_MODES:
-            url = _get_zone_post_url("zone_mode", zone_id=zone_id)
+            url = self.API_MOBILE_ZONE_URL.format(
+                end_point="zone_mode", zone_id=zone_id
+            )
 
             data = {"value": mode}
             self._post_and_update_zone_json(thermostat_id, zone_id, url, data)
@@ -1613,28 +1655,6 @@ class NexiaThermostat:
         else:
             temperature = round(temperature)
         return temperature
-
-
-def _get_zone_post_url(text=None, zone_id=0):
-    """
-        Returns the POST url from the text parameter for a specific zone
-        :param text: str
-        :param thermostat_id: int - the ID of the thermostat to use
-        :param zone_id: The index of the zone, defaults to 0.
-
-        :return: str
-        """
-    return "/xxl_zones/" + str(zone_id) + ("/" + text if text else "")
-
-
-def _get_thermostat_post_url(text=None, thermostat_id=None):
-    """
-        Returns the POST url from the text parameter
-        :param thermostat_id: int - the ID of the thermostat to use
-        :param text: str
-        :return: str
-        """
-    return f"/xxl_thermostats/" f"{str(thermostat_id)}/{text if text else ''}"
 
 
 def find_dict_with_keyvalue_in_json(json_dict, key_in_subdict, value_to_find):

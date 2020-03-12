@@ -1,5 +1,8 @@
 The `nexia` component lets you control thermostats connected to [Nexia (Trane/American Standard)](https://www.nexiahome.com/).
 
+<a href="https://github.com/psf/black"><img alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
+<a href="https://coveralls.io/github/ryannazaretian/hacs-nexia-climate-integration?branch=master"><img alt="Coverage Status" src="https://coveralls.io/repos/github/ryannazaretian/hacs-nexia-climate-integration/badge.svg?branch=master"></a>
+
 By connecting this component, you will have access to all thermostats and zones in your associated home.
 
 Like this? Love this? [Buy me a coffee?](https://www.buymeacoffee.com/ybLHaPf)
